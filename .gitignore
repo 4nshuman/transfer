@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+
+.env
+.env.*
+
+.DS_Store
+
+observations.jsonl
+*-observations.jsonl
+*-observations.csv
