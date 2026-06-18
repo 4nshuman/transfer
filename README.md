@@ -23,6 +23,7 @@ agent_tools/
     collect_chat_sessions.py
     collect_logs.py
   json_helpers.py
+  platform_paths.py
   schema.py
   write_output.py
 copilot_observability.py
@@ -98,6 +99,11 @@ Discover available sources:
 python3 copilot_observability.py discover
 ```
 
+Discovery uses platform-specific default paths. It checks VS Code-style data
+under `~/Library/Application Support` on macOS, `%APPDATA%` on Windows, and
+`$XDG_CONFIG_HOME` or `~/.config` on Linux. If discovery returns a path, pass
+that path to the matching collector instead of hardcoding an OS-specific value.
+
 Load local agents into Copilot:
 
 ```sh
@@ -161,11 +167,27 @@ python3 copilot_observability.py collect \
   --output vscode-observations.jsonl
 ```
 
+Windows PowerShell:
+
+```powershell
+python copilot_observability.py collect `
+  --vscode-logs-dir "$env:APPDATA\Code\logs" `
+  --output vscode-observations.jsonl
+```
+
 Collect VS Code Copilot Chat debug sessions:
 
 ```sh
 python3 copilot_observability.py collect \
   --vscode-workspace-storage-dir "$HOME/Library/Application Support/Code/User/workspaceStorage" \
+  --output vscode-chat-observations.jsonl
+```
+
+Windows PowerShell:
+
+```powershell
+python copilot_observability.py collect `
+  --vscode-workspace-storage-dir "$env:APPDATA\Code\User\workspaceStorage" `
   --output vscode-chat-observations.jsonl
 ```
 
@@ -176,6 +198,16 @@ python3 copilot_observability.py collect \
   --cli-state-dir ~/.copilot/session-state \
   --vscode-logs-dir "$HOME/Library/Application Support/Code/logs" \
   --vscode-workspace-storage-dir "$HOME/Library/Application Support/Code/User/workspaceStorage" \
+  --output observations.jsonl
+```
+
+Windows PowerShell:
+
+```powershell
+python copilot_observability.py collect `
+  --cli-state-dir "$HOME\.copilot\session-state" `
+  --vscode-logs-dir "$env:APPDATA\Code\logs" `
+  --vscode-workspace-storage-dir "$env:APPDATA\Code\User\workspaceStorage" `
   --output observations.jsonl
 ```
 
@@ -200,8 +232,8 @@ The tools can also be run directly:
 python3 -m agent_tools.discovery.discover_sources
 python3 -m agent_tools.sdk.collect_jsonl path/to/sdk-events.jsonl
 python3 -m agent_tools.cli.collect_sessions ~/.copilot/session-state
-python3 -m agent_tools.vscode.collect_logs "$HOME/Library/Application Support/Code/logs"
-python3 -m agent_tools.vscode.collect_chat_sessions "$HOME/Library/Application Support/Code/User/workspaceStorage"
+python3 -m agent_tools.vscode.collect_logs PATH_FROM_DISCOVERY
+python3 -m agent_tools.vscode.collect_chat_sessions PATH_FROM_DISCOVERY
 python3 -m agent_tools.cli.inspect_store ~/.copilot/session-store.db
 ```
 

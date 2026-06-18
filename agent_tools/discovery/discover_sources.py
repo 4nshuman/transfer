@@ -3,27 +3,56 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Mapping
 
 from agent_tools.json_helpers import print_json
+from agent_tools.platform_paths import (
+    default_cli_state_dir,
+    default_cli_store_db,
+    default_home,
+    vscode_logs_dirs,
+    vscode_workspace_storage_dirs,
+    xcode_logs_dir,
+)
 from agent_tools.vscode.collect_chat_sessions import find_vscode_chat_debug_files
 from agent_tools.vscode.collect_logs import find_vscode_log_files
+
+
+def first_available_path(
+    candidates: list[Path],
+    finder: Callable[[Path], list[Path]],
+) -> tuple[Path, list[Path]]:
+    fallback = candidates[0] if candidates else Path()
+    for path in candidates:
+        files = finder(path)
+        if files:
+            return path, files
+    return fallback, []
 
 
 def discover_sources(
     cli_state_dir: Path | None = None,
     cli_store_db: Path | None = None,
     sdk_jsonl: Path | None = None,
+    home: Path | None = None,
+    platform: str | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
-    home = Path.home()
-    cli_state_dir = cli_state_dir or home / ".copilot" / "session-state"
-    cli_store_db = cli_store_db or home / ".copilot" / "session-store.db"
-    vscode_logs_dir = home / "Library" / "Application Support" / "Code" / "logs"
-    vscode_workspace_storage_dir = home / "Library" / "Application Support" / "Code" / "User" / "workspaceStorage"
-    if sdk_jsonl is None and os.environ.get("COPILOT_SDK_TELEMETRY_FILE"):
-        sdk_jsonl = Path(os.environ["COPILOT_SDK_TELEMETRY_FILE"])
-    vscode_log_files = find_vscode_log_files(vscode_logs_dir)
-    vscode_chat_debug_files = find_vscode_chat_debug_files(vscode_workspace_storage_dir)
+    current_home = default_home(home)
+    current_env = os.environ if env is None else env
+    cli_state_dir = cli_state_dir or default_cli_state_dir(current_home)
+    cli_store_db = cli_store_db or default_cli_store_db(current_home)
+    vscode_logs_dir, vscode_log_files = first_available_path(
+        vscode_logs_dirs(current_home, platform, current_env),
+        find_vscode_log_files,
+    )
+    vscode_workspace_storage_dir, vscode_chat_debug_files = first_available_path(
+        vscode_workspace_storage_dirs(current_home, platform, current_env),
+        find_vscode_chat_debug_files,
+    )
+    xcode_dir = xcode_logs_dir(current_home, platform)
+    if sdk_jsonl is None and current_env.get("COPILOT_SDK_TELEMETRY_FILE"):
+        sdk_jsonl = Path(current_env["COPILOT_SDK_TELEMETRY_FILE"])
 
     return [
         {
@@ -46,7 +75,7 @@ def discover_sources(
         },
         {
             "source": "github_api",
-            "available": bool(os.environ.get("GITHUB_TOKEN")),
+            "available": bool(current_env.get("GITHUB_TOKEN")),
             "path": "https://api.github.com",
             "collector": "not_implemented_yet",
         },
@@ -64,9 +93,9 @@ def discover_sources(
         },
         {
             "source": "xcode_logs",
-            "available": (home / "Library" / "Logs" / "GitHubCopilot").exists(),
-            "path": str(home / "Library" / "Logs" / "GitHubCopilot"),
-            "collector": "not_implemented_yet",
+            "available": bool(xcode_dir and xcode_dir.exists()),
+            "path": str(xcode_dir or ""),
+            "collector": "not_implemented_yet" if xcode_dir and xcode_dir.exists() else "",
         },
     ]
 

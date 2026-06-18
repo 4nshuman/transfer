@@ -19,6 +19,7 @@ SESSION_ID_RE = re.compile(r"session(?:Id| id)[:=]\s*\[?(?P<id>[A-Za-z0-9_.:-]+)
 MODEL_RE = re.compile(r"model(?: deployment ID)?[:=]\s*\[(?P<model>[^\]]*)\]", re.IGNORECASE)
 USER_RE = re.compile(r"(?:Logged in as|Got Copilot token for)\s+(?P<user>[A-Za-z0-9_.-]+)")
 COMPONENT_RE = re.compile(r"^\[(?P<component>[^\]]+)\]\s*(?P<message>.*)$")
+HOME_PATH_RE = re.compile(r"(?:/Users|/home)/[^/\s]+|[A-Za-z]:\\Users\\[^\\\s]+", re.IGNORECASE)
 
 
 def is_vscode_copilot_log(path: Path) -> bool:
@@ -135,7 +136,7 @@ def error_status(level: str, message: str) -> str:
 
 
 def sanitize_message(message: str) -> str:
-    message = re.sub(r"/Users/[^/\s]+", "~", message)
+    message = HOME_PATH_RE.sub("~", message)
     message = re.sub(r"(token[:=]\s*)[^\s]+", r"\1[redacted]", message, flags=re.IGNORECASE)
     message = re.sub(r"(Bearer\s+)[A-Za-z0-9_.-]+", r"\1[redacted]", message)
     if len(message) > 240:

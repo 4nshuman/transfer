@@ -5,9 +5,10 @@ import argparse
 import json
 import shutil
 from pathlib import Path
+from typing import Mapping
 
+from agent_tools.platform_paths import default_copilot_dir, vscode_app_dirs, xcode_logs_dir
 
-VSCODE_APP_NAMES = ("Code", "Code - Insiders", "VSCodium")
 CHAT_DATA_NAMES = ("debug-logs", "transcripts", "chat-session-resources")
 
 
@@ -18,13 +19,13 @@ def add_existing(targets: dict[Path, str], path: Path, group: str) -> None:
 
 def cli_targets(home: Path) -> dict[Path, str]:
     targets: dict[Path, str] = {}
-    session_state = home / ".copilot" / "session-state"
+    copilot_dir = default_copilot_dir(home)
+    session_state = copilot_dir / "session-state"
     if session_state.exists():
         for path in session_state.iterdir():
             if path.is_dir():
                 targets[path.resolve()] = "cli_session_state"
 
-    copilot_dir = home / ".copilot"
     for name in (
         "session-store.db",
         "session-store.db-shm",
@@ -35,10 +36,13 @@ def cli_targets(home: Path) -> dict[Path, str]:
     return targets
 
 
-def vscode_targets(home: Path) -> dict[Path, str]:
+def vscode_targets(
+    home: Path,
+    platform: str | None = None,
+    env: Mapping[str, str] | None = None,
+) -> dict[Path, str]:
     targets: dict[Path, str] = {}
-    for app_name in VSCODE_APP_NAMES:
-        app_dir = home / "Library" / "Application Support" / app_name
+    for app_dir in vscode_app_dirs(home, platform, env):
         add_vscode_log_targets(targets, app_dir / "logs")
         add_vscode_workspace_targets(targets, app_dir / "User" / "workspaceStorage")
     return targets
@@ -70,15 +74,25 @@ def add_vscode_workspace_targets(targets: dict[Path, str], storage_dir: Path) ->
             add_existing(targets, chat_dir / name, f"vscode_chat_{name}")
 
 
-def xcode_targets(home: Path) -> dict[Path, str]:
+def xcode_targets(home: Path, platform: str | None = None) -> dict[Path, str]:
     targets: dict[Path, str] = {}
-    add_existing(targets, home / "Library" / "Logs" / "GitHubCopilot", "xcode_logs")
+    path = xcode_logs_dir(home, platform)
+    if path:
+        add_existing(targets, path, "xcode_logs")
     return targets
 
 
-def find_targets(home: Path) -> list[dict[str, str]]:
+def find_targets(
+    home: Path,
+    platform: str | None = None,
+    env: Mapping[str, str] | None = None,
+) -> list[dict[str, str]]:
     targets: dict[Path, str] = {}
-    for group in (cli_targets(home), vscode_targets(home), xcode_targets(home)):
+    for group in (
+        cli_targets(home),
+        vscode_targets(home, platform, env),
+        xcode_targets(home, platform),
+    ):
         targets.update(group)
 
     pruned = prune_nested_paths(sorted(targets))

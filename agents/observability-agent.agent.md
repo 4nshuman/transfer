@@ -47,9 +47,15 @@ Use these tools:
 - Use the wrapper for combined collection:
   `python3 copilot_observability.py collect --sdk-jsonl PATH --cli-state-dir PATH --vscode-logs-dir PATH --vscode-workspace-storage-dir PATH --output observations.jsonl`
 
+Source discovery is platform-aware. Run discovery first on macOS, Windows, and
+Linux, then use the returned paths for collectors instead of hardcoding
+OS-specific VS Code locations.
+
 Rules:
 
 - Prefer structured tool output over reading raw logs manually.
+- Prefer paths returned by discovery. If the user supplies explicit paths, use
+  those paths instead.
 - State which sources were used.
 - State which requested fields are unavailable for a source.
 - Keep missing values blank or null; do not infer them.

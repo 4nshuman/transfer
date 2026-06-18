@@ -11,7 +11,7 @@ from agent_tools.discovery.discover_sources import discover_sources
 from agent_tools.sdk.collect_jsonl import collect_sdk_jsonl
 from agent_tools.schema import FIELDS
 from agent_tools.vscode.collect_chat_sessions import collect_vscode_chat_sessions, find_vscode_chat_debug_files
-from agent_tools.vscode.collect_logs import collect_vscode_logs, find_vscode_log_files
+from agent_tools.vscode.collect_logs import collect_vscode_logs, find_vscode_log_files, sanitize_message
 from agent_tools.write_output import write_jsonl
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -119,6 +119,41 @@ class CopilotObservabilityTests(unittest.TestCase):
         self.assertTrue(by_source["sdk_jsonl"]["available"])
         self.assertFalse(by_source["cli_session_store"]["available"])
 
+    def test_discover_sources_uses_windows_vscode_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            home = Path(tmp_dir)
+            appdata = home / "AppData" / "Roaming"
+            log_dir = appdata / "Code" / "logs" / "window1" / "exthost" / "GitHub.copilot-chat"
+            log_dir.mkdir(parents=True)
+            (log_dir / "GitHub Copilot Chat.log").write_text("log", encoding="utf-8")
+
+            chat_file = (
+                appdata
+                / "Code"
+                / "User"
+                / "workspaceStorage"
+                / "workspace-a"
+                / "GitHub.copilot-chat"
+                / "debug-logs"
+                / "session-1"
+                / "main.jsonl"
+            )
+            chat_file.parent.mkdir(parents=True)
+            chat_file.write_text("{}\n", encoding="utf-8")
+
+            sources = discover_sources(home=home, platform="win32", env={"APPDATA": str(appdata)})
+
+        by_source = {source["source"]: source for source in sources}
+        self.assertTrue(by_source["vscode_logs"]["available"])
+        self.assertEqual(by_source["vscode_logs"]["path"], str(appdata / "Code" / "logs"))
+        self.assertTrue(by_source["vscode_chat_debug"]["available"])
+        self.assertEqual(
+            by_source["vscode_chat_debug"]["path"],
+            str(appdata / "Code" / "User" / "workspaceStorage"),
+        )
+        self.assertFalse(by_source["xcode_logs"]["available"])
+        self.assertEqual(by_source["xcode_logs"]["path"], "")
+
     def test_vscode_log_collection(self):
         rows = collect_vscode_logs(FIXTURES / "vscode_logs")
 
@@ -142,6 +177,14 @@ class CopilotObservabilityTests(unittest.TestCase):
 
         self.assertEqual(len(rows), 3)
         self.assertEqual(rows[0]["user"], "octocat")
+
+    def test_sanitize_message_redacts_windows_home_path(self):
+        message = r"failed at C:\Users\octocat\AppData\Roaming\Code token: secret"
+        sanitized = sanitize_message(message)
+
+        self.assertIn(r"~\AppData\Roaming\Code", sanitized)
+        self.assertIn("token: [redacted]", sanitized)
+        self.assertNotIn("octocat", sanitized)
 
     def test_find_vscode_log_files(self):
         files = find_vscode_log_files(FIXTURES / "vscode_logs")
@@ -303,7 +346,7 @@ class CopilotObservabilityTests(unittest.TestCase):
             keep_index = chat_dir / "workspace-chunks.db"
             keep_index.write_text("db", encoding="utf-8")
 
-            targets = find_surface_targets(home)
+            targets = find_surface_targets(home, platform="darwin")
             target_paths = {Path(target["path"]) for target in targets}
             self.assertIn(cli_session.resolve(), target_paths)
             self.assertIn(cache.resolve(), target_paths)
@@ -326,6 +369,27 @@ class CopilotObservabilityTests(unittest.TestCase):
             self.assertFalse(transcripts.exists())
             self.assertTrue(keep_agent.exists())
             self.assertTrue(keep_index.exists())
+
+    def test_clean_copilot_surface_data_targets_windows_vscode_data(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            home = Path(tmp_dir)
+            appdata = home / "AppData" / "Roaming"
+            copilot_log_dir = appdata / "Code" / "logs" / "run" / "exthost" / "GitHub.copilot-chat"
+            copilot_log_dir.mkdir(parents=True)
+            (copilot_log_dir / "GitHub Copilot Chat.log").write_text("log", encoding="utf-8")
+
+            chat_dir = appdata / "Code" / "User" / "workspaceStorage" / "abc" / "GitHub.copilot-chat"
+            debug_logs = chat_dir / "debug-logs"
+            transcripts = chat_dir / "transcripts"
+            debug_logs.mkdir(parents=True)
+            transcripts.mkdir()
+
+            targets = find_surface_targets(home, platform="win32", env={"APPDATA": str(appdata)})
+            target_paths = {Path(target["path"]) for target in targets}
+
+            self.assertIn(copilot_log_dir.resolve(), target_paths)
+            self.assertIn(debug_logs.resolve(), target_paths)
+            self.assertIn(transcripts.resolve(), target_paths)
 
     def test_code_files_stay_under_350_lines(self):
         root = FIXTURES.parents[1]
