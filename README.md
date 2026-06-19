@@ -1,287 +1,103 @@
-# Copilot Observability Agent
+# copilot_obs — local GitHub Copilot session observability
 
-Python-only collector for GitHub Copilot observability records.
+Discover and parse the artifacts GitHub Copilot writes on disk, and report
+per-session usage: **session label, model, time of query, time taken, and
+tokens consumed** — with no Copilot API or running editor required.
 
-The goal is intentionally narrow: provide one Copilot custom agent plus small
-Python tools that collect records from known Copilot surfaces, normalize them
-into one schema, and write JSONL or CSV.
-
-## Layout
-
-```text
-agents/
-  observability-agent.agent.md
-agent_tools/
-  cli/
-    collect_sessions.py
-    inspect_store.py
-  discovery/
-    discover_sources.py
-  sdk/
-    collect_jsonl.py
-  vscode/
-    collect_chat_sessions.py
-    collect_logs.py
-  json_helpers.py
-  platform_paths.py
-  schema.py
-  write_output.py
-copilot_observability.py
-load_agent.py
+```bash
+python -m copilot_obs list                     # all sessions, newest first
+python -m copilot_obs list --workspace miraee   # filter by workspace
+python -m copilot_obs list --model opus --json  # machine-readable
+python -m copilot_obs show <sessionId|prefix>   # per-query breakdown
+python -m copilot_obs export --out sessions.json
 ```
 
-`agents/observability-agent.agent.md` is the actual Copilot agent profile. The
-files under `agent_tools/` are the tools the agent can run with the shell
-execute tool. `copilot_observability.py` is only a thin wrapper for combined
-collection.
+Example `show` output (real session):
 
-`load_agent.py` copies agent files from `agents/` into `~/.copilot/agents` so
-Copilot can discover them locally.
-
-## Current Scope
-
-Implemented now:
-
-- Discover local/configured Copilot sources.
-- Collect Copilot SDK event JSONL with `assistant.usage`, tool, subagent, and error events.
-- Collect simple Copilot CLI session JSON/JSONL files from a session-state directory.
-- Collect VS Code Copilot diagnostic log events from Copilot-related log files.
-- Collect VS Code Copilot Chat debug sessions from workspace storage.
-- Normalize records into one common schema.
-- Write JSONL or CSV.
-
-Discovery-only for now:
-
-- Copilot CLI SQLite session store.
-- GitHub cloud agent API.
-- Xcode logs.
-- Enterprise audit logs.
-- Copilot usage metrics reports.
-
-Those sources need real samples or credentials before implementing parsers. The
-collector leaves unsupported fields blank rather than guessing.
-
-## Normalized Fields
-
-Every output row uses these fields:
-
-```text
-source
-run_id
-session_id
-session_label
-timestamp
-agent_name
-parent_agent_name
-model
-input_tokens
-output_tokens
-total_tokens
-cached_tokens
-duration_ms
-tool_calls
-error_status
-workspace
-user
-field_confidence
-raw_source_ref
+```
+Title     : Connecting Application to ADK/Livekit for AI Agent
+Totals    : 56 queries · 4,142,357 tokens (exact) · 14226s
+  #  WHEN              MODEL             PROMPT_TOK  COMPL_TOK   TIME   PROMPT
+  0  2026-02-08 21:16  claude-opus-4.6     111,913        514   365s   Now we need to connect...
 ```
 
-`field_confidence` is important because not all Copilot surfaces expose the
-same data. SDK events can expose token and duration fields directly. IDE logs
-often only expose troubleshooting details.
+## Where Copilot stores sessions
 
-## Usage
+The "Copilot sessions window" in VS Code is the chat history list. Each entry
+is one **session** (with a label); each session contains multiple **queries**;
+agent-mode edits spawn child editing-sessions. On disk:
 
-Discover available sources:
+| Artifact | macOS | Windows |
+|---|---|---|
+| Chat sessions (the list) | `~/Library/Application Support/<Editor>/User/workspaceStorage/<hash>/chatSessions/<id>.{json,jsonl}` | `%APPDATA%\<Editor>\User\workspaceStorage\<hash>\chatSessions\<id>.{json,jsonl}` |
+| Edit sub-sessions | `…/workspaceStorage/<hash>/chatEditingSessions/<uuid>/` | same |
+| Hash → real folder | `…/workspaceStorage/<hash>/workspace.json` | same |
+| Copilot CLI sessions | `~/.copilot/session-state/<id>/events.jsonl` + `~/.copilot/session-store.db` | `%USERPROFILE%\.copilot\…` |
+| Diagnostic log | `…/<Editor>/logs/<ts>/window<N>/exthost/GitHub.copilot-chat/GitHub Copilot Chat.log` | `%APPDATA%\<Editor>\logs\…` |
 
-```sh
-python3 copilot_observability.py discover
-```
+`<Editor>` ∈ `Code`, `Code - Insiders`, `VSCodium`, `Cursor`, `Windsurf` (Linux:
+`~/.config/<Editor>/…`). See [platforms.py](copilot_obs/platforms.py).
 
-Discovery uses platform-specific default paths. It checks VS Code-style data
-under `~/Library/Application Support` on macOS, `%APPDATA%` on Windows, and
-`$XDG_CONFIG_HOME` or `~/.config` on Linux. If discovery returns a path, pass
-that path to the matching collector instead of hardcoding an OS-specific value.
+## Two session formats (both handled)
 
-Load local agents into Copilot:
+* **`.json`** — a plain JSON session object (older).
+* **`.jsonl`** — an **event-sourced log** (newer). Line 0 is the snapshot
+  (`{"kind":"0","v":{…}}`); each later line mutates it (`kind:"1"` sets a value
+  at JSON path `k`; `kind:"2"` appends to the array at `k`). We **replay** the
+  log to rebuild the session — `json.load` on the whole file does not work.
+  See [`_replay_jsonl`](copilot_obs/vscode.py).
 
-```sh
-python3 load_agent.py
-```
+Per query we read `modelId`, `timestamp` (time of query), `result.timings`
+(`totalElapsed`/`firstProgress` = latency / time-to-first-token), and
+`result.usage` (`promptTokens`/`completionTokens`, with a `promptTokenDetails`
+category breakdown). `customTitle` is the session label (we fall back to the
+first user message when it is null).
 
-Preview without writing:
+## The token caveat (important)
 
-```sh
-python3 load_agent.py --dry-run
-```
+Exact token counts are **only present in newer `.jsonl` sessions** (the Copilot
+Chat version that added `result.usage`). On a real machine this covered **~51%
+of queries / 99 of 193 non-empty sessions (≈69M tokens)**. Older `.json`
+sessions and pre-`usage` turns have no token field — the CLI marks those `-`
+(not recorded). The `tokensExact` flag in `--json` distinguishes exact from
+absent. (Optional future work: estimate the missing ones by tokenizing prompt +
+response, or enable the opt-in OpenTelemetry file exporter — see below.)
 
-Preview cleanup of generated run files:
+## `.copilotmd` is not a file
 
-```sh
-python3 clean_run_data.py
-```
+There are no `*.copilotmd` files on disk. The string only appears as
+`ccreq:<8hex>.copilotmd` request-log **identifiers** inside
+`GitHub Copilot Chat.log`
+(`ccreq:<id>.copilotmd | <status> | <model> | <ms>ms | [copilotLanguageModelWrapper]`).
+The real per-session artifact is the `chatSessions` files above. The repo's
+original `find_copilotmd_files.py` was based on this misunderstanding and is
+superseded by this package.
 
-Delete generated run files and Python cache directories:
+## Pitfalls handled / known
 
-```sh
-python3 clean_run_data.py --apply
-```
+* **Huge files** — sessions can reach multiple GB when responses embed large
+  content. We stream line-by-line and skip giant content lines before
+  `json.loads`, but always parse lines carrying `promptTokens`/`totalElapsed`,
+  so token/latency fidelity is 100% while a full scan stays ~14s.
+* **Format drift** — the session schema is internal/undocumented and changes
+  between Copilot releases. Field access is defensive; event replay tolerates
+  unknown paths. Re-verify against new versions.
+* **Workspace hash orphaning** — renaming a folder or using dev-containers
+  orphans history under the old hash; we still list it (workspace may be `-`).
 
-Preview cleanup of raw local Copilot logs and debug/session data:
+## Extending to other surfaces
 
-```sh
-python3 clean_copilot_surface_data.py
-```
+The model ([models.py](copilot_obs/models.py)) is surface-agnostic; add a parser
+that yields `Session`/`Turn` and wire it into `cli.collect()`:
 
-Delete raw local Copilot logs and debug/session data:
-
-```sh
-python3 clean_copilot_surface_data.py --apply
-```
-
-Close VS Code, Copilot CLI, and other Copilot surfaces before running the raw
-surface cleanup with `--apply`; active tools may recreate files immediately.
-
-Collect SDK telemetry JSONL:
-
-```sh
-python3 copilot_observability.py collect \
-  --sdk-jsonl path/to/sdk-events.jsonl \
-  --output observations.jsonl
-```
-
-Collect Copilot CLI session files:
-
-```sh
-python3 copilot_observability.py collect \
-  --cli-state-dir ~/.copilot/session-state \
-  --output observations.jsonl
-```
-
-Collect VS Code Copilot diagnostic logs:
-
-```sh
-python3 copilot_observability.py collect \
-  --vscode-logs-dir "$HOME/Library/Application Support/Code/logs" \
-  --output vscode-observations.jsonl
-```
-
-Windows PowerShell:
-
-```powershell
-python copilot_observability.py collect `
-  --vscode-logs-dir "$env:APPDATA\Code\logs" `
-  --output vscode-observations.jsonl
-```
-
-Collect VS Code Copilot Chat debug sessions:
-
-```sh
-python3 copilot_observability.py collect \
-  --vscode-workspace-storage-dir "$HOME/Library/Application Support/Code/User/workspaceStorage" \
-  --output vscode-chat-observations.jsonl
-```
-
-Windows PowerShell:
-
-```powershell
-python copilot_observability.py collect `
-  --vscode-workspace-storage-dir "$env:APPDATA\Code\User\workspaceStorage" `
-  --output vscode-chat-observations.jsonl
-```
-
-Combine implemented local sources:
-
-```sh
-python3 copilot_observability.py collect \
-  --cli-state-dir ~/.copilot/session-state \
-  --vscode-logs-dir "$HOME/Library/Application Support/Code/logs" \
-  --vscode-workspace-storage-dir "$HOME/Library/Application Support/Code/User/workspaceStorage" \
-  --output observations.jsonl
-```
-
-Windows PowerShell:
-
-```powershell
-python copilot_observability.py collect `
-  --cli-state-dir "$HOME\.copilot\session-state" `
-  --vscode-logs-dir "$env:APPDATA\Code\logs" `
-  --vscode-workspace-storage-dir "$env:APPDATA\Code\User\workspaceStorage" `
-  --output observations.jsonl
-```
-
-Write CSV instead of JSONL:
-
-```sh
-python3 copilot_observability.py collect \
-  --sdk-jsonl path/to/sdk-events.jsonl \
-  --output observations.csv \
-  --format csv
-```
-
-Inspect the Copilot CLI SQLite store tables:
-
-```sh
-python3 copilot_observability.py inspect-store ~/.copilot/session-store.db
-```
-
-The tools can also be run directly:
-
-```sh
-python3 -m agent_tools.discovery.discover_sources
-python3 -m agent_tools.sdk.collect_jsonl path/to/sdk-events.jsonl
-python3 -m agent_tools.cli.collect_sessions ~/.copilot/session-state
-python3 -m agent_tools.vscode.collect_logs PATH_FROM_DISCOVERY
-python3 -m agent_tools.vscode.collect_chat_sessions PATH_FROM_DISCOVERY
-python3 -m agent_tools.cli.inspect_store ~/.copilot/session-store.db
-```
-
-VS Code log rows are diagnostic. They can usually provide timestamp, severity,
-request ID, user, and error/warning text when present. They should not be
-treated as a reliable source for input tokens, output tokens, cached tokens,
-model duration, or tool calls.
-
-CLI session-state rows use Copilot's saved title metadata when present. If a
-session title is not available, the collector falls back to the workspace
-summary or the first user message so the session can still be identified.
-
-VS Code chat-debug rows are structured session telemetry. They can provide
-session id, session label, response id, model, token counts, duration,
-workspace, and tool-call summaries when those fields are present in the debug
-JSONL. The collector does not store prompt or response text in normalized
-output.
-
-## Validation
-
-Run:
-
-```sh
-python3 -m unittest discover -s tests
-```
-
-The tests enforce that Python code files stay at or below 350 lines.
-
-## Design Notes
-
-This project intentionally avoids:
-
-- background services
-- plugin systems
-- factories/interfaces
-- external dependencies
-- speculative source adapters
-- undocumented API scraping
-
-The implementation should stay boring and local until real source samples prove
-that more structure is necessary.
-
-## Official Documentation Used
-
-- Copilot SDK streaming events: https://docs.github.com/en/copilot/how-tos/copilot-sdk/features/streaming-events
-- Copilot SDK OpenTelemetry: https://docs.github.com/en/copilot/how-tos/copilot-sdk/observability/opentelemetry
-- Copilot CLI session data: https://docs.github.com/en/copilot/concepts/agents/copilot-cli/chronicle
-- Cloud agent task API: https://docs.github.com/en/rest/agent-tasks/agent-tasks
-- IDE logs: https://docs.github.com/en/copilot/how-tos/troubleshoot-copilot/view-logs
-- Agentic audit logs: https://docs.github.com/en/copilot/reference/agentic-audit-log-events
-- Copilot usage metrics API: https://docs.github.com/en/rest/copilot/copilot-usage-metrics
+* **Copilot CLI** — `~/.copilot/session-store.db` (SQLite: `sessions`, `turns`,
+  `session_files`, `checkpoints`) + `session-state/<id>/events.jsonl`. Note: the
+  DB is absent until a CLI session runs, and reportedly not created on Windows
+  WSL2 — fall back to `events.jsonl`.
+* **OpenTelemetry (exact tokens + latency, all surfaces)** — set
+  `github.copilot.chat.otel.exporterType: "file"` and
+  `COPILOT_OTEL_FILE_EXPORTER_PATH` to write JSON-lines with
+  `gen_ai.usage.input_tokens` / `output_tokens` and duration histograms. Opt-in,
+  off by default.
+* **JetBrains** (`idea.log`) / **Xcode** (`~/Library/Logs/GitHubCopilot/`) —
+  general logs; little structured per-request usage.

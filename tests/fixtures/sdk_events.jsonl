@@ -1,4 +1,0 @@
-{"id":"event-1","timestamp":"2026-06-18T09:00:00Z","type":"subagent.selected","sessionId":"sdk-session-1","data":{"agentName":"review_agent","agentDisplayName":"Review Agent","tools":["shell"]}}
-{"id":"event-2","timestamp":"2026-06-18T09:00:01Z","type":"tool.execution_start","sessionId":"sdk-session-1","data":{"toolCallId":"tool-1","toolName":"shell"}}
-{"id":"event-3","timestamp":"2026-06-18T09:00:03Z","type":"tool.execution_complete","sessionId":"sdk-session-1","data":{"toolCallId":"tool-1","toolName":"shell","success":true}}
-{"id":"event-4","timestamp":"2026-06-18T09:00:04Z","type":"assistant.usage","sessionId":"sdk-session-1","data":{"apiCallId":"api-call-1","sessionLabel":"SDK fixture session","model":"gpt-5.2-codex","inputTokens":120,"outputTokens":45,"cacheReadTokens":10,"cacheWriteTokens":5,"durationMs":1500,"workspace":"/workspace/app","user":"octocat"}}

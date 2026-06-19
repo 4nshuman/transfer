@@ -1,1 +1,0 @@
-"""Copilot CLI surface tools."""

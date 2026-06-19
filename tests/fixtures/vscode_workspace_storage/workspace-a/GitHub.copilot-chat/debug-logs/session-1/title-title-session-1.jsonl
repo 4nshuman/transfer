@@ -1,2 +1,0 @@
-{"ts":1781774168432,"dur":0,"sid":"title-session-1","type":"session_start","name":"session_start","spanId":"session-start-title-session-1","status":"ok","attrs":{"parentSessionId":"debug-session-1","label":"title"}}
-{"ts":1781774168433,"dur":0,"sid":"title-session-1","type":"agent_response","name":"agent_response","spanId":"agent-msg-title","status":"ok","attrs":{"response":"[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Chatbot introduction\"}]}]"}}

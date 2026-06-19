@@ -1,3 +1,0 @@
-2026-06-18 14:43:52.743 [info] Logged in as octocat
-2026-06-18 14:43:56.937 [error] [CopilotCLISession] Failed to fetch models: Error: 403 "unauthorized: not authorized to use this Copilot feature\n"
-2026-06-18 14:46:08.431 [info] request done: requestId: [35eb72b9-81ab-4472-96bc-89ef0ed15ac7] model deployment ID: [gpt-4.1]

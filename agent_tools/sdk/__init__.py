@@ -1,1 +1,0 @@
-"""Copilot SDK surface tools."""

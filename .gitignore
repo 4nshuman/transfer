@@ -11,3 +11,4 @@ __pycache__/
 observations.jsonl
 *-observations.jsonl
 *-observations.csv
+sessions.json
